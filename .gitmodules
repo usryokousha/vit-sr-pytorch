@@ -1,0 +1,3 @@
+[submodule "SimMIM"]
+	path = SimMIM
+	url = https://github.com/microsoft/SimMIM.git
