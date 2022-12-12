@@ -1,6 +1,5 @@
 from math import sqrt
 import copy
-from functools import partial
 from random import choice
 from pathlib import Path
 from shutil import rmtree
@@ -15,8 +14,6 @@ import torchvision.transforms as T
 from torchvision.datasets import ImageFolder
 from torchvision.utils import make_grid, save_image
 
-from accelerate import Accelerator, DistributedDataParallelKwargs
-
 from einops import rearrange
 
 from vit_sr_pytorch.vqgan_vae import VQGanVAE
@@ -26,34 +23,23 @@ from ema_pytorch import EMA
 
 # helpers
 
-
 def exists(val):
     return val is not None
 
-def default(val, d):
-    if exists(val):
-        return val
-    return d() if callable(d) else d
-
-
 def noop(*args, **kwargs):
     pass
-
 
 def cycle(dl):
     while True:
         for data in dl:
             yield data
 
-
 def cast_tuple(t):
     return t if isinstance(t, (tuple, list)) else (t,)
-
 
 def yes_or_no(question):
     answer = input(f'{question} (y/n) ')
     return answer.lower() in ('yes', 'y')
-
 
 def accum_log(log, new_logs):
     for key, new_value in new_logs.items():
@@ -61,47 +47,24 @@ def accum_log(log, new_logs):
         log[key] = old_value + new_value
     return log
 
-
-def group_dict_by_key(cond, d):
-    return_val = [dict(),dict()]
-    for key in d.keys():
-        match = bool(cond(key))
-        ind = int(not match)
-        return_val[ind][key] = d[key]
-    return (*return_val,)
-
-def string_begins_with(prefix, str):
-    return str.startswith(prefix)
-
-def group_by_key_prefix(prefix, d):
-    return group_dict_by_key(partial(string_begins_with, prefix), d)
-
-def groupby_prefix_and_trim(prefix, d):
-    kwargs_with_prefix, kwargs = group_dict_by_key(partial(string_begins_with, prefix), d)
-    kwargs_without_prefix = dict(map(lambda x: (x[0][len(prefix):], x[1]), tuple(kwargs_with_prefix.items())))
-    return kwargs_without_prefix, kwargs
-
 # classes
-
 
 class ImageDataset(Dataset):
     def __init__(
         self,
         folder,
         image_size,
-        exts=['jpg', 'jpeg', 'png']
+        exts = ['jpg', 'jpeg', 'png']
     ):
         super().__init__()
         self.folder = folder
         self.image_size = image_size
-        self.paths = [p for ext in exts for p in Path(
-            f'{folder}').glob(f'**/*.{ext}')]
+        self.paths = [p for ext in exts for p in Path(f'{folder}').glob(f'**/*.{ext}')]
 
         print(f'{len(self.paths)} training samples found at {folder}')
 
         self.transform = T.Compose([
-            T.Lambda(lambda img: img.convert('RGB')
-                     if img.mode != 'RGB' else img),
+            T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
             T.Resize(image_size),
             T.RandomHorizontalFlip(),
             T.CenterCrop(image_size),
@@ -117,61 +80,35 @@ class ImageDataset(Dataset):
         return self.transform(img)
 
 # main trainer class
-
-
+# TODO: add support for multiple GPUs
 class VQGanVAETrainer(nn.Module):
     def __init__(
         self,
         vae,
+        *,
         num_train_steps,
-        vae_checkpoint_path=None,
-        lr=1e-4,
-        batch_size=8,
-        data_folder=None,
-        grad_accum_every=10,
-        weight_decay=0.,
-        split_batches=False,
-        save_results_every=100,
-        save_model_every=1000,
-        results_folder='./results',
-        valid_frac=0.05,
-        fp16=False,
-        precision=None,
-        random_split_seed=42,
-        ema_beta=0.995,
-        ema_update_after_step=500,
-        ema_update_every=10,
-        apply_grad_penalty_every=4,
-        amp=False
+        lr,
+        batch_size,
+        folder,
+        grad_accum_every,
+        wd = 0.,
+        save_results_every = 100,
+        save_model_every = 1000,
+        results_folder = './results',
+        valid_frac = 0.05,
+        random_split_seed = 42,
+        ema_beta = 0.995,
+        ema_update_after_step = 500,
+        ema_update_every = 10,
+        apply_grad_penalty_every = 4,
+        amp = False
     ):
         super().__init__()
-        assert not VQGanVAETrainer.locked, 'only one instance of VQGanVAETrainer can be created at a time'
-        assert exists(vae) ^ exists(vae_checkpoint_path)
-
         assert isinstance(vae, VQGanVAE), 'vae must be instance of VQGanVAE'
         image_size = vae.image_size
 
-        ema_kwargs, kwargs = groupby_prefix_and_trim('ema_', kwargs)
-        accelerate_kwargs, kwargs = groupby_prefix_and_trim('accelerate_', kwargs)
-
         self.vae = vae
-        self.ema_vae = EMA(
-            vae,
-            update_after_step=ema_update_after_step,
-            update_every=ema_update_every,
-            beta=ema_beta
-        )
-
-        assert not (fp16 and amp), 'fp16 and amp cannot both be True'
-        accelerator_mixed_precision = default(precision, 'fp16' if fp16 else 'no')
-        self.accelerator = Accelerator(
-            {
-                'split_batches': split_batches,
-                'mixed_precision': accelerator_mixed_precision,
-                'kwargs_handlers': [DistributedDataParallelKwargs(find_unused_parameters=True)],
-                **accelerate_kwargs
-            }
-        )
+        self.ema_vae = EMA(vae, update_after_step = ema_update_after_step, update_every = ema_update_every)
 
         self.register_buffer('steps', torch.Tensor([0]))
 
@@ -183,47 +120,40 @@ class VQGanVAETrainer(nn.Module):
         discr_parameters = set(vae.discr.parameters())
         vae_parameters = all_parameters - discr_parameters
 
-        self.optim = get_optimizer(vae_parameters, lr=lr, wd=weight_decay)
-        self.discr_optim = get_optimizer(discr_parameters, lr=lr, wd=weight_decay)
+        self.optim = get_optimizer(vae_parameters, lr = lr, wd = wd)
+        self.discr_optim = get_optimizer(discr_parameters, lr = lr, wd = wd)
 
-        self.cast_half_at_training = accelerator_mixed_precision == 'fp16'
-      
-        self.scaler = GradScaler(enabled=fp16)
-        self.discr_scaler = GradScaler(enabled=fp16)
+        self.amp = amp
+        self.scaler = GradScaler(enabled = amp)
+        self.discr_scaler = GradScaler(enabled = amp)
 
         # create dataset
 
-        self.ds = ImageDataset(data_folder, image_size=image_size)
+        self.ds = ImageDataset(folder, image_size = image_size)
 
         # split for validation
 
         if valid_frac > 0:
             train_size = int((1 - valid_frac) * len(self.ds))
             valid_size = len(self.ds) - train_size
-            self.ds, self.valid_ds = random_split(
-                self.ds,
-                [train_size, valid_size],
-                generator=torch.Generator().manual_seed(random_split_seed)
-            )
-            print(
-                f'training with dataset of {len(self.ds)} samples and validating with randomly splitted {len(self.valid_ds)} samples')
+            self.ds, self.valid_ds = random_split(self.ds, [train_size, valid_size], generator = torch.Generator().manual_seed(random_split_seed))
+            print(f'training with dataset of {len(self.ds)} samples and validating with randomly splitted {len(self.valid_ds)} samples')
         else:
             self.valid_ds = self.ds
-            print(
-                f'training with shared training and valid dataset of {len(self.ds)} samples')
+            print(f'training with shared training and valid dataset of {len(self.ds)} samples')
 
         # dataloader
 
         self.dl = cycle(DataLoader(
             self.ds,
-            batch_size=batch_size,
-            shuffle=True
+            batch_size = batch_size,
+            shuffle = True
         ))
 
         self.valid_dl = cycle(DataLoader(
             self.valid_ds,
-            batch_size=batch_size,
-            shuffle=True
+            batch_size = batch_size,
+            shuffle = True
         ))
 
         self.save_model_every = save_model_every
@@ -236,7 +166,7 @@ class VQGanVAETrainer(nn.Module):
         if len([*self.results_folder.glob('**/*')]) > 0 and yes_or_no('do you want to clear previous experiment checkpoints and results?'):
             rmtree(str(self.results_folder))
 
-        self.results_folder.mkdir(parents=True, exist_ok=True)
+        self.results_folder.mkdir(parents = True, exist_ok = True)
 
     def train_step(self):
         device = next(self.vae.parameters()).device
@@ -255,12 +185,13 @@ class VQGanVAETrainer(nn.Module):
             img = next(self.dl)
             img = img.to(device)
 
-            with autocast(enabled=self.amp):
+            with autocast(enabled = self.amp):
                 loss = self.vae(
                     img,
-                    return_loss=True,
-                    apply_grad_penalty=apply_grad_penalty
+                    return_loss = True,
+                    apply_grad_penalty = apply_grad_penalty
                 )
+
 
                 self.scaler.scale(loss / self.grad_accum_every).backward()
 
@@ -278,14 +209,12 @@ class VQGanVAETrainer(nn.Module):
                 img = next(self.dl)
                 img = img.to(device)
 
-                with autocast(enabled=self.amp):
-                    loss = self.vae(img, return_discr_loss=True)
+                with autocast(enabled = self.amp):
+                    loss = self.vae(img, return_discr_loss = True)
 
-                    self.discr_scaler.scale(
-                        loss / self.grad_accum_every).backward()
+                    self.discr_scaler.scale(loss / self.grad_accum_every).backward()
 
-                accum_log(
-                    logs, {'discr_loss': loss.item() / self.grad_accum_every})
+                accum_log(logs, {'discr_loss': loss.item() / self.grad_accum_every})
 
             self.discr_scaler.step(self.discr_optim)
             self.discr_scaler.update()
@@ -293,8 +222,7 @@ class VQGanVAETrainer(nn.Module):
 
             # log
 
-            print(
-                f"{steps}: vae loss: {logs['loss']} - discr loss: {logs['discr_loss']}")
+            print(f"{steps}: vae loss: {logs['loss']} - discr loss: {logs['discr_loss']}")
 
         # update exponential moving averaged generator
 
@@ -312,13 +240,11 @@ class VQGanVAETrainer(nn.Module):
                 recons = model(imgs)
                 nrows = int(sqrt(self.batch_size))
 
-                imgs_and_recons = torch.stack((imgs, recons), dim=0)
-                imgs_and_recons = rearrange(
-                    imgs_and_recons, 'r b ... -> (b r) ...')
+                imgs_and_recons = torch.stack((imgs, recons), dim = 0)
+                imgs_and_recons = rearrange(imgs_and_recons, 'r b ... -> (b r) ...')
 
                 imgs_and_recons = imgs_and_recons.detach().cpu().float().clamp(0., 1.)
-                grid = make_grid(imgs_and_recons, nrow=2,
-                                 normalize=True, value_range=(0, 1))
+                grid = make_grid(imgs_and_recons, nrow = 2, normalize = True, value_range = (0, 1))
 
                 logs['reconstructions'] = grid
 
@@ -342,7 +268,7 @@ class VQGanVAETrainer(nn.Module):
         self.steps += 1
         return logs
 
-    def train(self, log_fn=noop):
+    def train(self, log_fn = noop):
         device = next(self.vae.parameters()).device
 
         while self.steps < self.num_train_steps:
