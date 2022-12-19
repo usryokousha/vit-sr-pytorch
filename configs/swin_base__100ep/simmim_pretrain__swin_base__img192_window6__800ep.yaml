@@ -1,0 +1,28 @@
+MODEL:
+  TYPE: swin
+  NAME: simmim_pretrain
+  DROP_PATH_RATE: 0.0
+  SWIN:
+    PATCH_SIZE: 1
+    EMBED_DIM: 384
+    DEPTHS: [8, 4]
+    NUM_HEADS: [8, 16]
+    WINDOW_SIZE: 6
+DATA:
+  IMG_SIZE: 256
+  MASK_PATCH_SIZE: 1
+  MODEL_PATCH_SIZE: 1
+  MASK_RATIO: 0.4
+TRAIN:
+  EPOCHS: 100
+  WARMUP_EPOCHS: 1
+  BASE_LR: 1e-4
+  WARMUP_LR: 5e-7
+  WEIGHT_DECAY: 0.05
+  LR_SCHEDULER:
+    NAME: 'multistep'
+    GAMMA: 0.1
+    MULTISTEPS: [80,]
+PRINT_FREQ: 10
+SAVE_FREQ: 5
+TAG: simmim_pretrain__swin_base__img256_window6__100ep

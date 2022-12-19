@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: MIM Training",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main_mim.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--cfg=configs/vit_base__100ep/mim_pretrain__vit_base_img256_100ep.yaml",
+                "--data_path=training/pretrain_combined.txt",
+                "--label_path=training/pretrain_labels_combined.txt",
+                "--vae=training/vae-11-49445.pt",
+                "--output=d:/training"
+        ]
+        }
+    ]
+}

@@ -1,0 +1,31 @@
+MODEL:
+  TYPE: vit
+  NAME: simmim_pretrain
+  DROP_PATH_RATE: 0.1
+  DROP_RATE: 0.00
+  VIT:
+    EMBED_DIM: 768
+    DEPTH: 12
+    NUM_HEADS: 12
+    USE_APE: False
+    USE_RPB: False
+    USE_SHARED_RPB: True
+    USE_MEAN_POOLING: False
+DATA:
+  IMG_SIZE: 256
+  MASK_PATCH_SIZE: 2
+  MODEL_PATCH_SIZE: 2
+  MASK_RATIO: 0.05
+TRAIN:
+  EPOCHS: 100
+  WARMUP_EPOCHS: 1
+  BASE_LR: 1e-4
+  WARMUP_LR: 5e-7
+  WEIGHT_DECAY: 0.05
+  LR_SCHEDULER:
+    NAME: 'cosine'
+    GAMMA: 0.1
+    MULTISTEPS: [70,]
+PRINT_FREQ: 50
+SAVE_FREQ: 5
+TAG: mim_pretrain__vit_base__img256__100ep
